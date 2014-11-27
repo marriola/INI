@@ -22,23 +22,39 @@ pub mod reader {
     use ini_format::ini_format::SectionEntry;
 
 
-    ///////////////////////////////////////////////////////////////////////
+    //////////////////////////////////////////////////////////////////////////////////////////////
+    /// Takes a ParseResult. Throws away if no error, otherwise returns the error (propagating it
+    /// up the call stack)
 
-    /// Takes a ParseResult. Throws away if no error, otherwise returns the error (propagating it up the call stack)
-    macro_rules! verify (
+    macro_rules! verify_match (
         ($inp:expr) => (
             match $inp {
-                ParseResult::Err(e) => { return ParseResult::Err(e); },
+                MatchResult::Err(e) => { return ParseResult::Err(e); },
                 _                   => { },
             }
         );
     )
 
 
-    ///////////////////////////////////////////////////////////////////////
+    /{95}
+
+    enum IniItem {
+        Entry(Entry),
+        Section(Section),
+        SectionEntry(SectionEntry),
+        SectionName(String),
+        Key(String, String),
+        Comment(String),
+    }
+
+    enum MatchResult {
+        Ok,
+        Err(String),
+    }
 
     pub enum ParseResult {
         Ok,
+        StepOk(IniItem),
         Err(String),
     }
 
@@ -50,12 +66,12 @@ pub mod reader {
     pub struct IniReader {
         reader: BufferedReader<File>,
         next_char: char,
-        ini: IniFile,
+        pub ini: IniFile,
         good: bool,
     }
 
 
-    ///////////////////////////////////////////////////////////////////////
+    //////////////////////////////////////////////////////////////////////////////////////////////
 
     impl IniReader {
         pub fn new (filename: String) -> IniReader {
@@ -73,58 +89,99 @@ pub mod reader {
         }
 
 
-        ///////////////////////////////////////////////////////////////////////
+        //////////////////////////////////////////////////////////////////////////////////////////////
         // Parser functions
 
         pub fn parse (&mut self) -> ParseResult {
-            let mut result = ParseResult::Ok;
+            let mut result;
 
             self.get_next_char();
 
             while self.good {
                 if self.next_char == ';' {
-                    result = self.parse_comment();
+                    result = self.parse_comment(true);
                 } else {
                     result = self.parse_section();
                 }
 
-                verify!(result);
+                match result {
+                   ParseResult::Err(e) => { return ParseResult::Err(e); },
+                   ParseResult::StepOk(item) => match item {
+                    IniItem::Entry(entry) => self.ini.push(entry),
+                    _ => (),
+                   },
+                   _ => (),
+                }
             }
 
             ParseResult::Ok
         }
 
-        fn parse_comment (&mut self) -> ParseResult {
-            verify!(self.match_token(';', "parse_comment"));
+        //////////////////////////////////////////////////////////////////////////////////////////////
+
+        fn parse_comment (&mut self, root: bool) -> ParseResult {
+            verify_match!(self.match_token(';', "parse_comment"));
 
             let mut comment = match self.read_rest() {
                 ReadResult::Ok(str) => str,
                 ReadResult::Err(e)  => return ParseResult::Err(e)
             };
             comment = comment.trim().to_string();
-            println!("; {}", comment);
 
-            self.match_token('\n', "parse_comment");
-            ParseResult::Ok
+            if root {
+                ParseResult::StepOk(IniItem::Entry(Entry::Comment(comment)))
+            } else {
+                ParseResult::StepOk(IniItem::SectionEntry(SectionEntry::Comment(comment)))
+            }
         }
+
+        //////////////////////////////////////////////////////////////////////////////////////////////
 
         fn parse_section (&mut self) -> ParseResult {
-            verify!(self.parse_section_name());
+            let mut result;
 
-            while self.good && self.next_char != '\n' {
-                if (self.next_char == ';') {
-                    verify!(self.parse_comment());
+            result = self.parse_section_name();
+            let mut section_name = String::new();
+            match result {
+                ParseResult::Err(e) => { return ParseResult::Err(e); },
+                ParseResult::StepOk(item) => match item {
+                    IniItem::SectionName(name) => section_name = name,
+                    _ => (),
+                },
+                _ => (),
+            };
+
+            let mut section = Section { name: section_name, entries: Vec::<SectionEntry>::new() };
+
+            while self.good {
+                if self.next_char == ';' {
+                    result = self.parse_comment(false);
+                } else if self.next_char == '[' {
+                    break;
                 } else {
-                    verify!(self.parse_key());
+                    result = self.parse_key();
                 }
+
+                match result {
+                    ParseResult::Err(e) => return ParseResult::Err(e),
+                    ParseResult::StepOk(item) => match item {
+                        IniItem::Comment(comment) =>
+                            section.entries.push(SectionEntry::Comment(comment)),
+                        IniItem::Key(name, value) =>
+                            section.entries.push(SectionEntry::Key(name, value)),
+                        _ => (),
+                    },
+                    _ => (),
+                };
             }
             
-            self.match_token('\n', "parse_section");
-            ParseResult::Ok
+            ParseResult::StepOk(IniItem::Entry(Entry::Section(section)))
         }
 
+        //////////////////////////////////////////////////////////////////////////////////////////////
+
         fn parse_section_name (&mut self) -> ParseResult {
-            verify!(self.match_token('[', "parse_section"));
+            verify_match!(self.match_token('[', "parse_section"));
 
             let mut section_name = String::new();
 
@@ -133,12 +190,11 @@ pub mod reader {
                 self.get_next_char();
             }
 
-            self.match_token(']', "parse_section");
-            println!("[{}]", section_name);
-
-            self.match_token('\n', "parse_section");
-            ParseResult::Ok            
+            verify_match!(self.match_token(']', "parse_section"));
+            ParseResult::StepOk(IniItem::SectionName(section_name))
         }
+
+        //////////////////////////////////////////////////////////////////////////////////////////////
 
         fn parse_key (&mut self) -> ParseResult {
             let mut key_name = String::new();
@@ -148,53 +204,53 @@ pub mod reader {
                 self.get_next_char();
             }
 
-            self.match_token('=', "parse_key");
+            verify_match!(self.match_token('=', "parse_key"));
             let mut key_value = match self.read_rest() {
                 ReadResult::Ok(str) => str,
                 ReadResult::Err(e)  => return ParseResult::Err(e)
             };
             key_value = key_value.trim().to_string();
 
-            println!("{} = {}", key_name, key_value);
-
-            ParseResult::Ok
+            ParseResult::StepOk(IniItem::Key(key_name, key_value))
         }
 
 
-        ///////////////////////////////////////////////////////////////////////
+        //////////////////////////////////////////////////////////////////////////////////////////////
         // Helper functions
 
-        fn match_token (&mut self, match_char: char, fun: &str) -> ParseResult {
+        fn match_token (&mut self, match_char: char, fun: &str) -> MatchResult {
             if self.next_char != match_char {
-                return ParseResult::Err(format!("In {}: expected '{}', got '{}'", fun, match_char, self.next_char));
+                return MatchResult::Err(format!("In {}: expected '{}', got '{}'", fun,
+                                                match_char, self.next_char));
             }
 
             self.get_next_char();            
-            ParseResult::Ok
+            MatchResult::Ok
         }
 
-        fn get_next_char (&mut self) -> ParseResult {
+        fn get_next_char (&mut self) {
             self.next_char = ' ';
-            while self.next_char == ' ' || self.next_char == '\t' || self.next_char == '\r' {
+            while self.next_char.is_whitespace() {
                 self.next_char = match self.reader.read_char() {
                     Ok(c)   => c,
                     Err(e)  => {
                                     self.good = false;
-                                    return ParseResult::Err(format!("IO error: {}", e));
+                                    return;
                                }
                 }
             }
-
-            ParseResult::Ok
         }
 
         /// Returns the rest of the current line
         fn read_rest (&mut self) -> ReadResult {
-            while self.good && self.next_char == ' ' {
+            while self.good && self.next_char.is_whitespace() {
                 self.get_next_char();
             }
 
-            let line = match self.reader.read_line() { Ok(str) => str, Err(e) => return ReadResult::Err(format!("IO error: {}", e)) };
+            let line = match self.reader.read_line() {
+                    Ok(str) => str,
+                    Err(e) => return ReadResult::Err(format!("IO error: {}", e))
+            };
             let out = format!("{}{}", self.next_char, line);
 
             self.get_next_char();

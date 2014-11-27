@@ -19,9 +19,13 @@ mod reader;
 fn main () {
     let mut ini_reader = IniReader::new("test.ini".to_string());
     println!("Parse {}", match ini_reader.parse() {
-        ParseResult::Ok     => "successful".to_string(),
-        ParseResult::Err(e) => format!("failed ({})", e)
+        ParseResult::Ok => "successful".to_string(),
+        ParseResult::Err(e) => format!("failed ({})", e),
+        _ => String::new(),
     });
+
+    println!("====================");
+    write_ini_file(ini_reader.ini);
 }
 
 fn test_print () {
@@ -35,5 +39,3 @@ fn test_print () {
 
     write_ini_file(ini_file);
 }
-
-
