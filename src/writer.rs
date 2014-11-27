@@ -4,7 +4,7 @@
 
 pub mod writer {
     use ini_format::ini_format::Entry;
-    use ini_format::ini_format::SubEntry;
+    use ini_format::ini_format::SectionEntry;
     use ini_format::ini_format::Section;
 
     pub fn write_ini_file (ini_file: Vec<Entry>) {
@@ -24,8 +24,8 @@ pub mod writer {
 
         for sub_entry in section.entries.iter() {
             match sub_entry {
-                &SubEntry::Comment(ref comment)     => println!("; {}", comment),
-                &SubEntry::Key(ref name, ref value) => println!("{} = {}", name, value),
+                &SectionEntry::Comment(ref comment)     => println!("; {}", comment),
+                &SectionEntry::Key(ref name, ref value) => println!("{} = {}", name, value),
             }
         }
     }

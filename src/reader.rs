@@ -16,9 +16,10 @@ pub mod reader {
     use std::io::BufferedReader;
     use std::path::windows::Path;
 
+    use ini_format::ini_format::IniFile;
     use ini_format::ini_format::Entry;
-    use ini_format::ini_format::SubEntry;
     use ini_format::ini_format::Section;
+    use ini_format::ini_format::SectionEntry;
 
 
     ///////////////////////////////////////////////////////////////////////
@@ -49,7 +50,7 @@ pub mod reader {
     pub struct IniReader {
         reader: BufferedReader<File>,
         next_char: char,
-        ini: Vec<Entry>,
+        ini: IniFile,
         good: bool,
     }
 
